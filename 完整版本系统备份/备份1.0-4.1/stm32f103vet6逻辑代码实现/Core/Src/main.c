@@ -194,7 +194,7 @@ typedef struct
 #define KALMAN_FIXED_DT_S           0.02f
 #define KALMAN_Q_POS_DEFAULT        0.02f
 #define KALMAN_Q_VEL_DEFAULT        0.20f
-#define KALMAN_R_MEAS_DEFAULT       11.0f
+#define KALMAN_R_MEAS_DEFAULT       5.0f   /* 降低：更信任实测坐标，快速目标响应更及时，原值11.0偏保守 */
 #define KALMAN_P00_INIT             1.0f
 #define KALMAN_P11_INIT             1.0f
 #define KALMAN_DT_MIN_S             0.005f
@@ -537,7 +537,7 @@ typedef struct
  * 3. 锁定状态下（target_track_locked=1）HOLD 保护时间更长
  */
 #define TARGET_CANDIDATE_ENTER_FRAMES      2U
-#define TARGET_CONFIRM_ENTER_FRAMES        4U
+#define TARGET_CONFIRM_ENTER_FRAMES        3U   /* 降低：减少首次确认延迟约1帧，原值4U */
 #define TARGET_CANDIDATE_MAX_MISS_FRAMES   1U
 #define TARGET_HOLD_MAX_MISS_FRAMES_NORMAL 6U
 #define TARGET_HOLD_MS_NORMAL              550U

@@ -31,8 +31,8 @@ fusion_streak_norm_frames = 5.0
 fusion_position_delta_max = 40.0
 fusion_area_delta_max_permille = 12.0
 fusion_label_history_size = 5
-fusion_confirm_threshold = 0.72
-fusion_confirm_frames = 3
+fusion_confirm_threshold = 0.68  # 降低：更快达到确认条件，原值0.72
+fusion_confirm_frames = 2     # 降低：减少首次确认帧数，加快响应~1帧，原值3
 fusion_lost_threshold = 0.28
 fusion_lost_frames = 4
 
