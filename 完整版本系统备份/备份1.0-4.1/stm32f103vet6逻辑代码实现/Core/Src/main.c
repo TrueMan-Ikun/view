@@ -223,7 +223,7 @@ typedef struct
  * SERVO_UPDATE_DELAY_MS：
  * 控制循环更新周期。
  */
-#define SERVO_SMOOTH_FACTOR         0.45f  /* 调高：云台跟随更快，原值0.30偏慢 */
+#define SERVO_SMOOTH_FACTOR         0.35f  /* 调高：云台跟随更快，原值0.30偏慢 */
 #define SERVO_DEAD_BAND             1.0f
 #define SERVO_UPDATE_DELAY_MS       8      /* 缩短：提升云台更新频率，原值12ms */
 

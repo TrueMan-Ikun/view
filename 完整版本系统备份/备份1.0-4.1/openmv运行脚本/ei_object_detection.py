@@ -201,16 +201,16 @@ def compute_fusion_score(confidence_score, streak_score, position_score, label_s
 
 
 def print_fusion_log(state_name, ct, kt, pt, mt, at, st, force=False):
-    global debug_frame_count
-
-    debug_frame_count += 1
-
-    if (not force) and ((debug_frame_count % 5) != 0):
-        return
-
-    print("mode:%s state:%s Ct:%.2f Kt:%.2f Pt:%.2f Mt:%.2f At:%.2f St:%.2f c:%d l:%d fps:%.2f" %
-          (target_label, state_name, ct, kt, pt, mt, at, st,
-           fusion_confirm_count, fusion_lost_count, clock.fps()))
+    # 生产模式：关闭USB调试输出，避免每5帧阻塞10~20ms影响帧率
+    # 需要调试时取消下面注释即可
+    return
+    # global debug_frame_count
+    # debug_frame_count += 1
+    # if (not force) and ((debug_frame_count % 5) != 0):
+    #     return
+    # print("mode:%s state:%s Ct:%.2f Kt:%.2f Pt:%.2f Mt:%.2f At:%.2f St:%.2f c:%d l:%d fps:%.2f" %
+    #       (target_label, state_name, ct, kt, pt, mt, at, st,
+    #        fusion_confirm_count, fusion_lost_count, clock.fps()))
 
 
 def handle_target_mode_cmd():
