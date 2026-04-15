@@ -264,8 +264,8 @@ typedef struct
 #define X_TRACK_STEP_MAX_DEG        4.5f   /* 放开：允许更大单帧修正，原值3.2 */
 #define X_CENTER_SLOW_FACTOR        0.7f
 #define X_CENTER_STEP_MAX_DEG       0.8f
-/* 步进直通（不做步进层平滑），单层平滑由 SERVO_SMOOTH_FACTOR 统一处理 */
-#define X_STEP_SMOOTH_ALPHA         1.0f   /* 1.0=直通，去掉步进层滞后，原值0.60 */
+/* 恢复轻度步进低通平滑：1.0会导致突变过快使舵机机械齿轮回弹抖动，改为0.70起缓冲作用 */
+#define X_STEP_SMOOTH_ALPHA         0.70f
 
 /* =========================================================
  * 9. Y 轴（俯仰）跟随参数
@@ -285,8 +285,8 @@ typedef struct
 #define Y_TRACK_STEP_MAX_DEG        1.5f   /* 放开：允许更大单帧修正，原值1.0 */
 #define Y_CENTER_SLOW_FACTOR        0.7f
 #define Y_CENTER_STEP_MAX_DEG       0.5f
-/* 步进直通（不做步进层平滑），单层平滑由 SERVO_SMOOTH_FACTOR 统一处理 */
-#define Y_STEP_SMOOTH_ALPHA         1.0f   /* 1.0=直通，去掉步进层滞后，原值0.60 */
+/* 恢复轻度步进低通平滑，同X轴，防机械回弹 */
+#define Y_STEP_SMOOTH_ALPHA         0.70f
 
 /* 跟踪锁定：以中心点为基准，静止目标稳定后冻结微调，偏离后再解锁 */
 #define TRACK_LOCK_CENTER_X_PIXELS       160.0f
@@ -496,8 +496,9 @@ typedef struct
 #define SEARCH_X_LEFT_ANGLE         20.0f
 #define SEARCH_X_RIGHT_ANGLE        180.0f
 #define SEARCH_Y_FIXED_ANGLE        90.0f
-#define SEARCH_STEP_DEG             1.2f
-#define SEARCH_UPDATE_MS            25U
+/* 将搜索更新周期与主循环(8ms)严格对齐，消除"快慢停"错峰步级跳频造成的卡顿感。步长等比例缩放(1.2*8/25 ≈ 0.4) */
+#define SEARCH_STEP_DEG             0.40f
+#define SEARCH_UPDATE_MS            8U
 #define SEARCH_START_DELAY_MS       800U
 
 /* =========================================================
@@ -514,8 +515,9 @@ typedef struct
 #define SEARCH_PHASE1_TIME_GAIN_DEG_PER_S   4.0f
 #define SEARCH_PHASE1_MIN_AMPLITUDE_DEG     8.0f
 #define SEARCH_PHASE1_MAX_AMPLITUDE_DEG     26.0f
-#define SEARCH_PHASE1_STEP_DEG              1.8f
-#define SEARCH_PHASE1_UPDATE_MS             18U
+/* 同步缩放局部搜索的速度，更新周期18->8，步长1.8->0.8 */
+#define SEARCH_PHASE1_STEP_DEG              0.80f
+#define SEARCH_PHASE1_UPDATE_MS             8U
 #define SEARCH_PHASE1_TIMEOUT_MS            1800U
 
 #define SEARCH_PHASE2_STEP_BASE_DEG         1.2f
