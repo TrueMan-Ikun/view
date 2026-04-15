@@ -2899,7 +2899,8 @@ void Servo_SetAngle(TIM_HandleTypeDef *htim, uint32_t channel, float angle)
     pulse = SERVO_PULSE_MIN_US +
             (angle / SERVO_FULL_ANGLE_DEG) * (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
 
-    __HAL_TIM_SET_COMPARE(htim, channel, (uint16_t)pulse);
+    /* 加上 0.5f 实现四舍五入，避免直接截断成 uint16 导致的单向（左侧）台阶量化误差叠加机械间隙造成的卡顿 */
+    __HAL_TIM_SET_COMPARE(htim, channel, (uint16_t)(pulse + 0.5f));
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
