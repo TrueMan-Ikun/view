@@ -259,13 +259,13 @@ typedef struct
  */
 #define X_CENTER_MIN                150.0f
 #define X_CENTER_MAX                170.0f
-#define X_TRACK_STEP_GAIN_DEG       4.5f
+#define X_TRACK_STEP_GAIN_DEG       5.5f   /* 提高：更积极响应误差，原值4.5 */
 #define X_TRACK_DIRECTION           (-1.0f)
-#define X_TRACK_STEP_MAX_DEG        3.2f
+#define X_TRACK_STEP_MAX_DEG        4.5f   /* 放开：允许更大单帧修正，原值3.2 */
 #define X_CENTER_SLOW_FACTOR        0.7f
 #define X_CENTER_STEP_MAX_DEG       0.8f
-/* X 轴步进轻度低通：平滑 step 本身，不再使用硬限变化量 */
-#define X_STEP_SMOOTH_ALPHA         0.60f
+/* 步进直通（不做步进层平滑），单层平滑由 SERVO_SMOOTH_FACTOR 统一处理 */
+#define X_STEP_SMOOTH_ALPHA         1.0f   /* 1.0=直通，去掉步进层滞后，原值0.60 */
 
 /* =========================================================
  * 9. Y 轴（俯仰）跟随参数
@@ -280,13 +280,13 @@ typedef struct
  */
 #define Y_CENTER_MIN                110.0f
 #define Y_CENTER_MAX                130.0f
-#define Y_TRACK_STEP_GAIN_DEG       3.2f
+#define Y_TRACK_STEP_GAIN_DEG       3.8f   /* 提高：更积极响应Y轴误差，原值3.2 */
 #define Y_TRACK_DIRECTION           (1.0f)
-#define Y_TRACK_STEP_MAX_DEG        1.0f
+#define Y_TRACK_STEP_MAX_DEG        1.5f   /* 放开：允许更大单帧修正，原值1.0 */
 #define Y_CENTER_SLOW_FACTOR        0.7f
 #define Y_CENTER_STEP_MAX_DEG       0.5f
-/* Y 轴步进低通：与 X 轴同机制，消除台阶感 */
-#define Y_STEP_SMOOTH_ALPHA         0.60f
+/* 步进直通（不做步进层平滑），单层平滑由 SERVO_SMOOTH_FACTOR 统一处理 */
+#define Y_STEP_SMOOTH_ALPHA         1.0f   /* 1.0=直通，去掉步进层滞后，原值0.60 */
 
 /* 跟踪锁定：以中心点为基准，静止目标稳定后冻结微调，偏离后再解锁 */
 #define TRACK_LOCK_CENTER_X_PIXELS       160.0f
