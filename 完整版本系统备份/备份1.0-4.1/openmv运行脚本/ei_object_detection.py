@@ -32,7 +32,7 @@ fusion_position_delta_max = 40.0
 fusion_area_delta_max_permille = 12.0
 fusion_label_history_size = 5
 fusion_confirm_threshold = 0.68  # 降低：更快达到确认条件，原值0.72
-fusion_confirm_frames = 2     # 降低：减少首次确认帧数，加快响应~1帧，原值3
+fusion_confirm_frames = 3     # 保守：保持3帧确认，抑制误触发
 fusion_lost_threshold = 0.28
 fusion_lost_frames = 4
 
@@ -369,7 +369,8 @@ while True:
             else:
                 state_name = "CANDIDATE"
                 img.draw_string(2, 18, "Candidate", color=(255, 255, 0), scale=1)
-                uart.write("X:-1,Y:-1,A:-1\r\n")
+                # 发送真实坐标而不是-1：STM32的状态机负责确认防误触，消除双层延迟叠加
+                uart.write("X:%d,Y:%d,A:%d\r\n" % (center_x, center_y, area_permille))
                 print_fusion_log(state_name, ct, kt, pt, mt, at, st, force=False)
     else:
         target_detect_streak = 0
