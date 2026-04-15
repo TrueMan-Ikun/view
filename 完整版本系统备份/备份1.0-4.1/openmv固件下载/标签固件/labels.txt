@@ -1,0 +1,7 @@
+background
+elevator
+exit
+extinguisher
+office
+stairs
+toilet
