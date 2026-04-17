@@ -101,6 +101,14 @@ typedef struct
     float r;
 } Kalman1D;
 
+typedef enum
+{
+    BUZZER_ZONE_NONE = 0,
+    BUZZER_ZONE_CENTER,
+    BUZZER_ZONE_OUTER,
+    BUZZER_ZONE_EDGE
+} BuzzerZone_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -546,6 +554,20 @@ typedef struct
 #define TARGET_HOLD_MS_LOCKED              1100U
 #define TARGET_CONFIRM_MIN_AREA_PERMILLE   2U
 
+#define BUZZER_GPIO_Port GPIOE
+#define BUZZER_Pin GPIO_PIN_5
+#define BUZZER_ON() HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET)
+#define BUZZER_OFF() HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET)
+
+#define BUZZER_RADAR_ON_CENTER  8U
+#define BUZZER_RADAR_OFF_CENTER 150U
+#define BUZZER_RADAR_ON_OUTER   10U
+#define BUZZER_RADAR_OFF_OUTER  600U
+#define BUZZER_RADAR_ON_EDGE    10U
+#define BUZZER_RADAR_OFF_EDGE   1500U
+
+#define GUIDE_REPROMPT_INTERVAL_MS 2500U
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -591,6 +613,7 @@ UART_HandleTypeDef huart2;
     float guide_area_ref_collect_sum = 0.0f;
     uint16_t guide_area_ref_collect_samples = 0U;
     GuideCommandState_t guide_command_state = GUIDE_COMMAND_IDLE;
+    uint32_t guide_last_voice_tick = 0U;
 
     float last_x_error = 0;
     
@@ -608,6 +631,11 @@ UART_HandleTypeDef huart2;
     int32_t oled_last_disp_x = -32768;
     int32_t oled_last_disp_y = -32768;
     int32_t oled_last_disp_a = -32768;
+
+    /* 蜂鸣器状态机变量 */
+    BuzzerZone_t buzzer_last_zone = BUZZER_ZONE_NONE;
+    uint8_t buzzer_is_on = 0U;
+    uint32_t buzzer_state_tick = 0U;
 
     SearchControlConfig g_search_control_cfg =
     {
@@ -798,6 +826,8 @@ uint8_t Should_Refresh_OLED(uint32_t now_tick,
 
 void Send_TargetMode_To_OpenMV(uint8_t mode);
 void Update_TargetMode_Display(uint8_t mode);
+void Handle_Buzzer_Update(void);
+void Handle_GuideVoice_Update(void);
 uint8_t Search_IsActive_FromModule(void);
 uint8_t Search_IsLocalRecapture_FromModule(void);
 void Start_NormalSearch_ByModule(uint32_t now_tick);
@@ -1394,6 +1424,7 @@ else
 
     /* 搜索/发现目标的自动语音放在状态更新完成后统一处理 */
     Handle_SystemVoice_Update();
+    Handle_Buzzer_Update();
     Handle_GuideVoice_Update();
 
     HAL_Delay(SERVO_UPDATE_DELAY_MS);
@@ -1629,6 +1660,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : buzzer_Pin */
+  GPIO_InitStruct.Pin = BUZZER_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(BUZZER_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -2391,6 +2432,16 @@ void Handle_GuideVoice_Update(void)
         return;
     }
 
+    /*
+     * 引导逻辑优化：
+     * 1. 如果处于 HOLD 状态（目标短暂丢失），保持静默，不发出方向误导。
+     * 2. 引入周期性重复提示（2.5s），防止用户一直偏离却听不到二次指令。
+     */
+    if (target_presence_state == TARGET_PRESENCE_HOLD)
+    {
+        return;
+    }
+
     if (!g_voice_policy_state.mode_found_prompt_played ||
         g_voice_policy_state.lost_recovery_active ||
         g_voice_policy_state.mode_switch_wait_for_first_found)
@@ -2438,12 +2489,10 @@ void Handle_GuideVoice_Update(void)
         return;
     }
 
-    guide_last_zone = zone;
-
     /*
      * 指令型引导策略（三态）：
      * 1. IDLE         : 允许发一次“向左/向右转”，或居中时直接“正前方”
-     * 2. WAIT_CENTER  : 已发左右转指令，只等进入中间区，不重复左右播报
+     * 2. WAIT_CENTER  : 已发左右转指令，只等进入中间区，定期重复提示指令
      * 3. DONE         : 已播“正前方”，等待再次明显偏离后再开启下一轮
      */
     if ((guide_command_state == GUIDE_COMMAND_DONE) && (zone != GUIDE_ZONE_FORWARD))
@@ -2461,6 +2510,24 @@ void Handle_GuideVoice_Update(void)
                                   now_tick);
             SystemVoice_Update(&g_system_voice_state, now_tick);
             guide_command_state = GUIDE_COMMAND_DONE;
+            guide_last_voice_tick = now_tick;
+        }
+        else
+        {
+            /* 如果用户迟迟未修正，每隔一段时间（如 2.5s）重新提示一次 */
+            if ((now_tick - guide_last_voice_tick) >= GUIDE_REPROMPT_INTERVAL_MS)
+            {
+                guide_event = Get_GuideEvent_FromZone(zone);
+                if (guide_event != VOICE_EVT_NONE)
+                {
+                    SystemVoice_PostEvent(&g_system_voice_state,
+                                          guide_event,
+                                          (TargetMode_t)current_target_mode,
+                                          now_tick);
+                    SystemVoice_Update(&g_system_voice_state, now_tick);
+                    guide_last_voice_tick = now_tick;
+                }
+            }
         }
         return;
     }
@@ -2485,6 +2552,7 @@ void Handle_GuideVoice_Update(void)
                                   (TargetMode_t)current_target_mode,
                                   now_tick);
             SystemVoice_Update(&g_system_voice_state, now_tick);
+            guide_last_voice_tick = now_tick;
         }
     }
 }
@@ -2944,6 +3012,98 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
+
+/*
+ * 函数名：Handle_Buzzer_Update
+ * 功能：基于当前相对角度执行“雷达式”连续节奏反馈（强反馈模式）
+ */
+void Handle_Buzzer_Update(void)
+{
+    uint32_t now_tick = HAL_GetTick();
+    BuzzerZone_t current_zone = BUZZER_ZONE_NONE;
+    float offset_deg;
+    float abs_offset_deg;
+    uint32_t on_ms = 0, off_ms = 0;
+    uint8_t is_voice_busy = 0U;
+
+    /* 0. 语音优先级检查：如果语音正在播报，大幅降低蜂鸣器频率，防止声音杂乱 */
+    if (now_tick < SystemVoice_GetGuardUntilTick(&g_system_voice_state))
+    {
+        is_voice_busy = 1U;
+    }
+
+    /* 1. 过滤不响音的条件：无模式、搜索中、完全丢失目标 */
+    if ((current_target_mode == TARGET_MODE_NONE) ||
+        Search_IsActive_FromModule() ||
+        (target_presence_state == TARGET_PRESENCE_LOST))
+    {
+        if (buzzer_is_on)
+        {
+            BUZZER_OFF();
+            buzzer_is_on = 0U;
+        }
+        buzzer_last_zone = BUZZER_ZONE_NONE;
+        return;
+    }
+
+    /* 1-B. HOLD 状态特殊反馈：表达“目标闪失，正在试图重合校准” */
+    if (target_presence_state == TARGET_PRESENCE_HOLD)
+    {
+        on_ms = 10U;   /* 极短嘀嗒 */
+        off_ms = 120U; /* 快速节奏 */
+    }
+    else
+    {
+        /* 2. 正常跟踪状态：判读当前处于哪个分区 */
+        offset_deg = current_angle_x - GUIDE_CENTER_ANGLE_DEG;
+        abs_offset_deg = (offset_deg >= 0.0f) ? offset_deg : (-offset_deg);
+
+        if (abs_offset_deg < GUIDE_OFFSET_FORWARD_DEG)
+        {
+            current_zone = BUZZER_ZONE_CENTER; /* 锁定中心 */
+            on_ms = BUZZER_RADAR_ON_CENTER;
+            off_ms = BUZZER_RADAR_OFF_CENTER;
+        }
+        else if (abs_offset_deg < GUIDE_OFFSET_STRONG_DEG)
+        {
+            current_zone = BUZZER_ZONE_OUTER; /* 接近中心 */
+            on_ms = BUZZER_RADAR_ON_OUTER;
+            off_ms = BUZZER_RADAR_OFF_OUTER;
+        }
+        else
+        {
+            current_zone = BUZZER_ZONE_EDGE; /* 位于边缘 */
+            on_ms = BUZZER_RADAR_ON_EDGE;
+            off_ms = BUZZER_RADAR_OFF_EDGE;
+        }
+    }
+
+    /* 3. 优先级抑制：如果语音忙，强制将间隔拉长到 1.5s 以上，保持静默压制 */
+    if (is_voice_busy)
+    {
+        off_ms = 1500U;
+    }
+
+    /* 4. 执行非阻塞脉冲逻辑 */
+    if (buzzer_is_on)
+    {
+        if ((now_tick - buzzer_state_tick) >= on_ms)
+        {
+            BUZZER_OFF();
+            buzzer_is_on = 0U;
+            buzzer_state_tick = now_tick;
+        }
+    }
+    else
+    {
+        if ((now_tick - buzzer_state_tick) >= off_ms)
+        {
+            BUZZER_ON();
+            buzzer_is_on = 1U;
+            buzzer_state_tick = now_tick;
+        }
+    }
+}
 
 /* USER CODE END 4 */
 
