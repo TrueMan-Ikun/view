@@ -376,7 +376,7 @@ typedef enum
  * 4. 模块上电等待时间
  * 优先修改这里即可。
  */
-#define DFPLAYER_DEFAULT_VOLUME          15U
+#define DFPLAYER_DEFAULT_VOLUME          25U
 #define DFPLAYER_MODE_TOILET_MP3_INDEX   1U
 #define DFPLAYER_MODE_EXIT_MP3_INDEX     2U
 #define DFPLAYER_MODE_OFFICE_MP3_INDEX   3U
@@ -528,10 +528,10 @@ typedef enum
 #define SEARCH_PHASE1_UPDATE_MS             8U
 #define SEARCH_PHASE1_TIMEOUT_MS            1800U
 
-#define SEARCH_PHASE2_STEP_BASE_DEG         1.2f
-#define SEARCH_PHASE2_STEP_GAIN_DEG_PER_S   0.4f
-#define SEARCH_PHASE2_STEP_MIN_DEG          1.2f
-#define SEARCH_PHASE2_STEP_MAX_DEG          2.4f
+#define SEARCH_PHASE2_STEP_BASE_DEG         0.75f
+#define SEARCH_PHASE2_STEP_GAIN_DEG_PER_S   0.25f
+#define SEARCH_PHASE2_STEP_MIN_DEG          0.75f
+#define SEARCH_PHASE2_STEP_MAX_DEG          1.50f
 #define SEARCH_PHASE2_LEFT_ANGLE            SEARCH_X_LEFT_ANGLE
 #define SEARCH_PHASE2_RIGHT_ANGLE           SEARCH_X_RIGHT_ANGLE
 
