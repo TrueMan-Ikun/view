@@ -109,6 +109,12 @@ typedef enum
     BUZZER_ZONE_EDGE
 } BuzzerZone_t;
 
+typedef enum
+{
+    ULTRASONIC_GUIDE_IDLE = 0,
+    ULTRASONIC_GUIDE_ACTIVE
+} UltrasonicGuideState_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -376,7 +382,7 @@ typedef enum
  * 4. 模块上电等待时间
  * 优先修改这里即可。
  */
-#define DFPLAYER_DEFAULT_VOLUME          25U
+#define DFPLAYER_DEFAULT_VOLUME          15U
 #define DFPLAYER_MODE_TOILET_MP3_INDEX   1U
 #define DFPLAYER_MODE_EXIT_MP3_INDEX     2U
 #define DFPLAYER_MODE_OFFICE_MP3_INDEX   3U
@@ -568,6 +574,29 @@ typedef enum
 
 #define GUIDE_REPROMPT_INTERVAL_MS 2500U
 
+/* =========================================================
+ * 17. 超声波测距参数
+ * =========================================================
+ * 说明：
+ * 1. 仅在"用户已正对目标 1.5 秒"后启用
+ * 2. 用超声波实测距离替代 FOMO 面积做距离引导
+ * 3. 蜂鸣器同步切换为距离节奏模式
+ */
+#define ULTRASONIC_TRIG_PORT            GPIOE
+#define ULTRASONIC_TRIG_PIN             GPIO_PIN_11
+#define ULTRASONIC_ECHO_PORT            GPIOE
+#define ULTRASONIC_ECHO_PIN             GPIO_PIN_10
+#define ULTRASONIC_MEASURE_INTERVAL_MS  200U
+#define ULTRASONIC_TIMEOUT_US           25000U
+#define ULTRASONIC_VALID_MIN_CM         3U
+#define ULTRASONIC_VALID_MAX_CM         350U
+#define ULTRASONIC_FILTER_ALPHA         0.30f
+#define ULTRASONIC_FORWARD_DWELL_MS     1500U
+#define ULTRASONIC_DIST_ARRIVED_CM      25U
+#define ULTRASONIC_DIST_NEAR_CM         40U
+#define ULTRASONIC_DIST_FAR_CM          45U
+#define ULTRASONIC_VOICE_COOLDOWN_MS    5000U
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -632,10 +661,15 @@ UART_HandleTypeDef huart2;
     int32_t oled_last_disp_y = -32768;
     int32_t oled_last_disp_a = -32768;
 
-    /* 蜂鸣器状态机变量 */
-    BuzzerZone_t buzzer_last_zone = BUZZER_ZONE_NONE;
-    uint8_t buzzer_is_on = 0U;
-    uint32_t buzzer_state_tick = 0U;
+    /* 超声波测距变量 */
+    uint32_t ultrasonic_last_measure_tick = 0U;
+    float ultrasonic_distance_cm = -1.0f;
+    float ultrasonic_raw_distance_cm = -1.0f;
+    uint8_t ultrasonic_guide_active = 0U;
+    uint32_t ultrasonic_forward_dwell_tick = 0U;
+    uint8_t ultrasonic_arrived_played = 0U;
+    uint8_t ultrasonic_forward_played = 0U;
+    uint32_t ultrasonic_last_voice_tick = 0U;
 
     SearchControlConfig g_search_control_cfg =
     {
@@ -749,45 +783,39 @@ const GuideAreaThresholdConfig_t guide_area_threshold_table[TARGET_MODE_COUNT] =
    * current_angle_x : 当前实际输出角度
    * target_angle_x  : 目标角度
    */
-  float filtered_x = IMAGE_CENTER_X;
-  float x_error = 0.0f;
-  float current_angle_x = SERVO_X_START_ANGLE;
-  float target_angle_x  = SERVO_X_START_ANGLE;
-  float smooth_step_x = 0.0f;
-  float smooth_step_y = 0.0f;
-  Kalman1D kf_x;
+/* 蜂鸣器状态机变量（全局，供 Handle_Buzzer_Update 访问） */
+BuzzerZone_t buzzer_last_zone = BUZZER_ZONE_NONE;
+uint8_t buzzer_is_on = 0U;
+uint32_t buzzer_state_tick = 0U;
 
-  /* =========================================================
-  * 4. Y 轴控制变量
-  * ========================================================= */
-  float filtered_y = IMAGE_CENTER_Y;
-  float y_error = 0.0f;
-  float current_angle_y = SERVO_Y_START_ANGLE;
-  float target_angle_y  = SERVO_Y_START_ANGLE;
-  Kalman1D kf_y;
-  uint32_t kalman_last_update_tick = 0U;
+/* X/Y 轴控制变量（全局，供各控制函数访问） */
+float filtered_x = IMAGE_CENTER_X;
+float x_error = 0.0f;
+float current_angle_x = SERVO_X_START_ANGLE;
+float target_angle_x  = SERVO_X_START_ANGLE;
+float smooth_step_x = 0.0f;
+float smooth_step_y = 0.0f;
+Kalman1D kf_x;
 
-  /* =========================================================
-   * 5. 目标状态变量
-   * =========================================================
-   * last_target_tick : 最近一次收到有效目标的时间
-   * target_valid     : 当前是否处于“检测到目标”的状态
-   */
-  uint32_t last_target_tick = 0;
-  uint8_t target_valid = 0;
-  uint8_t target_track_locked = 0U;
-  uint32_t target_track_lock_candidate_tick = 0U;
-  uint32_t target_track_unlock_candidate_tick = 0U;
-  uint8_t target_track_unlock_candidate_frames = 0U;
-  TargetPresenceState_t target_presence_state = TARGET_PRESENCE_LOST;
-  uint8_t target_presence_hit_count = 0U;
-  uint8_t target_presence_miss_count = 0U;
-  uint32_t target_presence_hold_start_tick = 0U;
-  uint8_t target_presence_hold_locked_snapshot = 0U;
- 
+float filtered_y = IMAGE_CENTER_Y;
+float y_error = 0.0f;
+float current_angle_y = SERVO_Y_START_ANGLE;
+float target_angle_y  = SERVO_Y_START_ANGLE;
+Kalman1D kf_y;
+uint32_t kalman_last_update_tick = 0U;
 
-
-
+/* 目标状态变量（全局，供各函数访问） */
+uint32_t last_target_tick = 0;
+uint8_t target_valid = 0;
+uint8_t target_track_locked = 0U;
+uint32_t target_track_lock_candidate_tick = 0U;
+uint32_t target_track_unlock_candidate_tick = 0U;
+uint8_t target_track_unlock_candidate_frames = 0U;
+TargetPresenceState_t target_presence_state = TARGET_PRESENCE_LOST;
+uint8_t target_presence_hit_count = 0U;
+uint8_t target_presence_miss_count = 0U;
+uint32_t target_presence_hold_start_tick = 0U;
+uint8_t target_presence_hold_locked_snapshot = 0U;
 
 /* USER CODE END PV */
 
@@ -846,11 +874,16 @@ void Reset_SystemVoice_State(uint8_t clear_found_prompt_flag);
 void Handle_SystemVoice_Update(void);
 void Handle_Voice_Test_Key(void);
 void Key_Scan_And_Handle(void);
+void DWT_Init(void);
+void Delay_Us(uint32_t us);
+float Ultrasonic_MeasureCm(void);
+void Handle_Ultrasonic_Update(void);
+void Reset_Ultrasonic_Guide(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
+/* USER CODE BEGIN 0*/
 
 /* USER CODE END 0 */
 
@@ -934,6 +967,7 @@ int main(void)
   SystemVoice_Init(&g_system_voice_state, &g_system_voice_cfg);
   Reset_TargetCoordinateFilters();
   Reset_TargetPresence_State();
+  DWT_Init();
 
   /* =========================================================
    * 2. 目标坐标变量
@@ -1424,6 +1458,7 @@ else
 
     /* 搜索/发现目标的自动语音放在状态更新完成后统一处理 */
     Handle_SystemVoice_Update();
+    Handle_Ultrasonic_Update();
     Handle_Buzzer_Update();
     Handle_GuideVoice_Update();
 
@@ -1647,6 +1682,12 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_5, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_11, GPIO_PIN_RESET);
+
   /*Configure GPIO pins : PE2 PE3 PE7 PE13
                            PE14 PE15 */
   GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_7|GPIO_PIN_13
@@ -1655,21 +1696,31 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PE5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
   /*Configure GPIO pins : PC0 PC1 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+  /*Configure GPIO pin : PE10 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : buzzer_Pin */
-  GPIO_InitStruct.Pin = BUZZER_Pin;
+  /*Configure GPIO pin : PE11 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(BUZZER_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -2287,6 +2338,7 @@ void Reset_GuideVoice_State(void)
     guide_area_ref_collect_sum = 0.0f;
     guide_area_ref_collect_samples = 0U;
     guide_command_state = GUIDE_COMMAND_IDLE;
+    Reset_Ultrasonic_Guide();
 }
 
 GuideForwardLevel_t Get_GuideForwardLevel_FromAreaByMode(uint8_t mode, int32_t area_permille)
@@ -2429,6 +2481,7 @@ void Handle_GuideVoice_Update(void)
         guide_area_ref_collect_sum = 0.0f;
         guide_area_ref_collect_samples = 0U;
         guide_command_state = GUIDE_COMMAND_IDLE;
+        Reset_Ultrasonic_Guide();
         return;
     }
 
@@ -2498,6 +2551,7 @@ void Handle_GuideVoice_Update(void)
     if ((guide_command_state == GUIDE_COMMAND_DONE) && (zone != GUIDE_ZONE_FORWARD))
     {
         guide_command_state = GUIDE_COMMAND_IDLE;
+        Reset_Ultrasonic_Guide(); /* 离开正前方区，重置超声波引导 */
     }
 
     if (guide_command_state == GUIDE_COMMAND_WAIT_CENTER)
@@ -2553,6 +2607,70 @@ void Handle_GuideVoice_Update(void)
                                   now_tick);
             SystemVoice_Update(&g_system_voice_state, now_tick);
             guide_last_voice_tick = now_tick;
+        }
+    }
+
+    /* ---------------------------------------------------------------
+     * 超声波引导激活逻辑：
+     * 当状态机已到达 GUIDE_COMMAND_DONE（已播"正前方"）且方向区仍为
+     * GUIDE_ZONE_FORWARD，开始计时；满 ULTRASONIC_FORWARD_DWELL_MS 后
+     * 置 ultrasonic_guide_active，启动测距引导。
+     * --------------------------------------------------------------- */
+    if ((guide_command_state == GUIDE_COMMAND_DONE) && (zone == GUIDE_ZONE_FORWARD))
+    {
+        if (ultrasonic_forward_dwell_tick == 0U)
+        {
+            ultrasonic_forward_dwell_tick = now_tick; /* 开始计时 */
+        }
+        else if ((!ultrasonic_guide_active) &&
+                 ((now_tick - ultrasonic_forward_dwell_tick) >= ULTRASONIC_FORWARD_DWELL_MS))
+        {
+            ultrasonic_guide_active = 1U; /* 激活超声波引导 */
+        }
+    }
+    else
+    {
+        /* 不在 DONE+FORWARD 状态，复位计时（但不清除 guide_active，
+         * guide_active 只在方向发生变化 / Reset_Ultrasonic_Guide 时清除） */
+        ultrasonic_forward_dwell_tick = 0U;
+    }
+
+    /* ---------------------------------------------------------------
+     * 超声波距离语音引导：
+     * 激活后，根据过滤距离播报"请向前走"或"已到达目标附近"
+     * --------------------------------------------------------------- */
+    if (ultrasonic_guide_active && (ultrasonic_distance_cm > 0.0f))
+    {
+        if ((now_tick - ultrasonic_last_voice_tick) >= ULTRASONIC_VOICE_COOLDOWN_MS)
+        {
+            SystemVoiceEvent_t dist_event = VOICE_EVT_NONE;
+
+            if (ultrasonic_distance_cm <= (float)ULTRASONIC_DIST_ARRIVED_CM)
+            {
+                /* 已到达目标附近：0028.mp3 */
+                if (!ultrasonic_arrived_played)
+                {
+                    dist_event = VOICE_EVT_GUIDE_ARRIVED;
+                    ultrasonic_arrived_played = 1U;
+                    ultrasonic_forward_played = 0U; /* 重置，方便后续再提示 */
+                }
+            }
+            else
+            {
+                /* 距离较远：0025.mp3 请向前走 */
+                dist_event = VOICE_EVT_GUIDE_FORWARD;
+                ultrasonic_arrived_played = 0U;
+            }
+
+            if (dist_event != VOICE_EVT_NONE)
+            {
+                SystemVoice_PostEvent(&g_system_voice_state,
+                                      dist_event,
+                                      (TargetMode_t)current_target_mode,
+                                      now_tick);
+                SystemVoice_Update(&g_system_voice_state, now_tick);
+                ultrasonic_last_voice_tick = now_tick;
+            }
         }
     }
 }
@@ -3055,26 +3173,53 @@ void Handle_Buzzer_Update(void)
     else
     {
         /* 2. 正常跟踪状态：判读当前处于哪个分区 */
-        offset_deg = current_angle_x - GUIDE_CENTER_ANGLE_DEG;
-        abs_offset_deg = (offset_deg >= 0.0f) ? offset_deg : (-offset_deg);
-
-        if (abs_offset_deg < GUIDE_OFFSET_FORWARD_DEG)
+        if (ultrasonic_guide_active && (ultrasonic_distance_cm > 0.0f))
         {
-            current_zone = BUZZER_ZONE_CENTER; /* 锁定中心 */
-            on_ms = BUZZER_RADAR_ON_CENTER;
-            off_ms = BUZZER_RADAR_OFF_CENTER;
-        }
-        else if (abs_offset_deg < GUIDE_OFFSET_STRONG_DEG)
-        {
-            current_zone = BUZZER_ZONE_OUTER; /* 接近中心 */
-            on_ms = BUZZER_RADAR_ON_OUTER;
-            off_ms = BUZZER_RADAR_OFF_OUTER;
+            /* 2-A. 超声波引导激活时：改用距离分区替代角度分区，
+             *       让蜂鸣器节奏反映与目标的实际物理距离 */
+            if (ultrasonic_distance_cm <= (float)ULTRASONIC_DIST_ARRIVED_CM)
+            {
+                current_zone = BUZZER_ZONE_CENTER;       /* 已到达：快速节奏 */
+                on_ms = BUZZER_RADAR_ON_CENTER;
+                off_ms = BUZZER_RADAR_OFF_CENTER;
+            }
+            else if (ultrasonic_distance_cm <= (float)ULTRASONIC_DIST_NEAR_CM)
+            {
+                current_zone = BUZZER_ZONE_OUTER;        /* 较近：中频节奏 */
+                on_ms = BUZZER_RADAR_ON_OUTER;
+                off_ms = BUZZER_RADAR_OFF_OUTER;
+            }
+            else
+            {
+                current_zone = BUZZER_ZONE_EDGE;         /* 较远：低频节奏 */
+                on_ms = BUZZER_RADAR_ON_EDGE;
+                off_ms = BUZZER_RADAR_OFF_EDGE;
+            }
         }
         else
         {
-            current_zone = BUZZER_ZONE_EDGE; /* 位于边缘 */
-            on_ms = BUZZER_RADAR_ON_EDGE;
-            off_ms = BUZZER_RADAR_OFF_EDGE;
+            /* 2-B. 普通跟踪模式：基于云台角度偏差分区 */
+            offset_deg = current_angle_x - GUIDE_CENTER_ANGLE_DEG;
+            abs_offset_deg = (offset_deg >= 0.0f) ? offset_deg : (-offset_deg);
+
+            if (abs_offset_deg < GUIDE_OFFSET_FORWARD_DEG)
+            {
+                current_zone = BUZZER_ZONE_CENTER; /* 锁定中心 */
+                on_ms = BUZZER_RADAR_ON_CENTER;
+                off_ms = BUZZER_RADAR_OFF_CENTER;
+            }
+            else if (abs_offset_deg < GUIDE_OFFSET_STRONG_DEG)
+            {
+                current_zone = BUZZER_ZONE_OUTER; /* 接近中心 */
+                on_ms = BUZZER_RADAR_ON_OUTER;
+                off_ms = BUZZER_RADAR_OFF_OUTER;
+            }
+            else
+            {
+                current_zone = BUZZER_ZONE_EDGE; /* 位于边缘 */
+                on_ms = BUZZER_RADAR_ON_EDGE;
+                off_ms = BUZZER_RADAR_OFF_EDGE;
+            }
         }
     }
 
@@ -3101,6 +3246,119 @@ void Handle_Buzzer_Update(void)
             BUZZER_ON();
             buzzer_is_on = 1U;
             buzzer_state_tick = now_tick;
+        }
+    }
+}
+
+/*
+ * 函数名：DWT_Init
+ * 功能：启用 DWT 周期计数器，供微秒延时使用
+ */
+void DWT_Init(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+/*
+ * 函数名：Delay_Us
+ * 功能：基于 DWT 周期计数器的微秒级忙等延时
+ */
+void Delay_Us(uint32_t us)
+{
+    uint32_t start = DWT->CYCCNT;
+    uint32_t ticks = us * (SystemCoreClock / 1000000U);
+    while ((DWT->CYCCNT - start) < ticks)
+    {
+    }
+}
+
+/*
+ * 函数名：Ultrasonic_MeasureCm
+ * 功能：HC-SR04 单次测距，返回距离（cm），超时返回 -1
+ */
+float Ultrasonic_MeasureCm(void)
+{
+    uint32_t start;
+    uint32_t elapsed_us;
+    uint32_t timeout_cycles = ULTRASONIC_TIMEOUT_US * (SystemCoreClock / 1000000U);
+
+    HAL_GPIO_WritePin(ULTRASONIC_TRIG_PORT, ULTRASONIC_TRIG_PIN, GPIO_PIN_SET);
+    Delay_Us(10);
+    HAL_GPIO_WritePin(ULTRASONIC_TRIG_PORT, ULTRASONIC_TRIG_PIN, GPIO_PIN_RESET);
+
+    start = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(ULTRASONIC_ECHO_PORT, ULTRASONIC_ECHO_PIN) == GPIO_PIN_RESET)
+    {
+        if ((DWT->CYCCNT - start) > timeout_cycles)
+        {
+            return -1.0f;
+        }
+    }
+
+    start = DWT->CYCCNT;
+    while (HAL_GPIO_ReadPin(ULTRASONIC_ECHO_PORT, ULTRASONIC_ECHO_PIN) == GPIO_PIN_SET)
+    {
+        if ((DWT->CYCCNT - start) > timeout_cycles)
+        {
+            return -1.0f;
+        }
+    }
+
+    elapsed_us = (DWT->CYCCNT - start) / (SystemCoreClock / 1000000U);
+    return (float)elapsed_us * 0.017f;
+}
+
+/*
+ * 函数名：Reset_Ultrasonic_Guide
+ * 功能：重置超声波距离引导状态
+ */
+void Reset_Ultrasonic_Guide(void)
+{
+    ultrasonic_guide_active = 0U;
+    ultrasonic_forward_dwell_tick = 0U;
+    ultrasonic_arrived_played = 0U;
+    ultrasonic_forward_played = 0U;
+    ultrasonic_distance_cm = -1.0f;
+    ultrasonic_raw_distance_cm = -1.0f;
+    ultrasonic_last_voice_tick = 0U;
+}
+
+/*
+ * 函数名：Handle_Ultrasonic_Update
+ * 功能：周期性超声波测距 + 滤波（仅在引导激活时才测量）
+ */
+void Handle_Ultrasonic_Update(void)
+{
+    uint32_t now_tick = HAL_GetTick();
+    float raw;
+
+    if (!ultrasonic_guide_active)
+    {
+        return;
+    }
+
+    if ((now_tick - ultrasonic_last_measure_tick) < ULTRASONIC_MEASURE_INTERVAL_MS)
+    {
+        return;
+    }
+
+    ultrasonic_last_measure_tick = now_tick;
+    raw = Ultrasonic_MeasureCm();
+
+    if ((raw >= (float)ULTRASONIC_VALID_MIN_CM) && (raw <= (float)ULTRASONIC_VALID_MAX_CM))
+    {
+        ultrasonic_raw_distance_cm = raw;
+
+        if (ultrasonic_distance_cm < 0.0f)
+        {
+            ultrasonic_distance_cm = raw;
+        }
+        else
+        {
+            ultrasonic_distance_cm = ultrasonic_distance_cm * (1.0f - ULTRASONIC_FILTER_ALPHA)
+                                   + raw * ULTRASONIC_FILTER_ALPHA;
         }
     }
 }
